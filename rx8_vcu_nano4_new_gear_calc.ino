@@ -46,6 +46,27 @@ long calcMicrosecODO(float speedKMH)
   return 4500000;
 }
 
+//led blink
+unsigned long lastHeartbeat = 0;
+bool heartbeatState = false;
+
+// ---------- CAN Diagnostics ----------
+uint32_t canTxCount = 0;
+uint32_t canRxCount = 0;
+
+uint32_t lastTxID = 0;
+uint32_t lastRxID = 0;
+
+uint32_t lastCanDebugTime = 0;
+
+uint32_t txPerSecond = 0;
+uint32_t rxPerSecond = 0;
+
+uint32_t lastTxSnapshot = 0;
+uint32_t lastRxSnapshot = 0;
+
+bool canDumpEnabled = false;
+
 //--------------------------------------------------
 // Odemeter
 //---------------------------------------------------
@@ -62,25 +83,26 @@ const int UP_pin = 7;
 const int DOWN_pin = 8;
 const int GearN_pin = 9;
 //const int spareInput1 = 12;
-//const int spareInput2 = A5;
+
 
 //inputs digital 12v isolated
 //const int optoInput1 = 2;
 //const int optoInput2 = 3;
 
 //inputs anologe
-const int throttle1Pin = A0;
-const int throttle2Pin = A1;
+const int throttle1Pin = A4;
+const int throttle2Pin = A3;
 const int regenPin = A2;
+//const int spare analog = A1;
+//const int spare analog = A0;
 
 //outputs
-const int Oil_pump = 6;
+const int Oil_pump = 13;
 
 //const int out2 = 10;
 //const int out3 = 11;
-//const int out4 = 13;
-//const int out5 = A6;
-//const int out6 = A7;
+//const int out4 = 6;
+
 
 // --------------------------------------------------
 // Debounce Structure
@@ -111,6 +133,8 @@ uint8_t canrun1 = 0;
 uint8_t canrun2 = 0;
 uint16_t cruiseTarget = 0;
 uint8_t regenPreset = 0;
+bool inverterSeen = false;
+unsigned long lastInverterMessage = 0;
 
 // --------------------------------------------------
 // RX8 Dash Frame
@@ -132,6 +156,7 @@ uint8_t send201[8] = {0, 0, 255, 255, 0, 0, 0, 255};
 
 int engineRPM = 0;
 int vehicleSpeed = 0;
+int transmissionSpeed = 0;
 int i_count = 0;
 
 // --------------------------------------------------
@@ -173,7 +198,13 @@ unsigned long throttleFaultClearTimer = 0;
 uint16_t throttleMaxDiff = 300;
 
 bool invertThrottle1 = false;
-bool invertThrottle2 = true;
+bool invertThrottle2 = false;
+
+uint16_t throttle1Min = 323;
+uint16_t throttle1Max = 794;
+
+uint16_t throttle2Min = 212;
+uint16_t throttle2Max = 683;
 
 uint16_t throttle1_raw = 0;
 uint16_t throttle2_raw = 0;
@@ -221,13 +252,13 @@ uint8_t computeCRC8(uint8_t *data, uint8_t len)
 // --------------------------------------------------
 void calcGear()
 {
-  if ((engineRPM < 50) || (vehicleSpeed < 5))
+  if ((engineRPM < 50) || (transmissionSpeed < 5))
     return;
 
   // Calculate ratio
   Ratiocalc =
     ((float)engineRPM * 2080) /
-    (vehicleSpeed * 1667 * 4.3);
+    (transmissionSpeed * 1667 * 4.3);
 
   // Find closest gear
   int detectedGear = 0;
@@ -289,7 +320,9 @@ void updatePCM()
   send201[5] = lowByte(tempVehicleSpeed);
 
   CanMsg msg(0x201, 8, send201);
-  CAN.write(msg);
+CAN.write(msg);
+canTxCount++;
+lastTxID = msg.id;
 }
 
 
@@ -302,18 +335,49 @@ void sendODO()
 
   CanMsg msg(0x420, 7, send420);
   CAN.write(msg);
+  canTxCount++;
+lastTxID = msg.id;
 }
 
-void sendPCMFrames()
+
+  void sendPCMFrames()
 {
-  CAN.write(CanMsg(0x203, 7, send203));
-  CAN.write(CanMsg(0x215, 8, send215));
-  CAN.write(CanMsg(0x231, 8, send231));
-  CAN.write(CanMsg(0x240, 8, send240));
-  CAN.write(CanMsg(0x620, 7, send620));
-  CAN.write(CanMsg(0x630, 8, send630));
-  CAN.write(CanMsg(0x650, 1, send650));
+    CanMsg msg203(0x203,7,send203);
+    CAN.write(msg203);
+    canTxCount++;
+    lastTxID = msg203.id;
+
+    CanMsg msg215(0x215,8,send215);
+    CAN.write(msg215);
+    canTxCount++;
+    lastTxID = msg215.id;
+
+    CanMsg msg231(0x231,8,send231);
+    CAN.write(msg231);
+    canTxCount++;
+    lastTxID = msg231.id;
+
+    CanMsg msg240(0x240,8,send240);
+    CAN.write(msg240);
+    canTxCount++;
+    lastTxID = msg240.id;
+
+    CanMsg msg620(0x620,7,send620);
+    CAN.write(msg620);
+    canTxCount++;
+    lastTxID = msg620.id;
+
+    CanMsg msg630(0x630,8,send630);
+    CAN.write(msg630);
+    canTxCount++;
+    lastTxID = msg630.id;
+
+    CanMsg msg650(0x650,1,send650);
+    CAN.write(msg650);
+    canTxCount++;
+    lastTxID = msg650.id;
 }
+
 
 //--------------------------------------------
 // Serial debuging
@@ -408,19 +472,47 @@ void sendOpenInverterCommand()
 throttle1_raw = analogRead(throttle1Pin);
 throttle2_raw = analogRead(throttle2Pin);
 
-// Convert to 12-bit
-throttle1_scaled = throttle1_raw * 4;
-throttle2_scaled = throttle2_raw * 4;
 
-// apply inversion if configured
+// Saturate raw ADC values to calibrated range
+throttle1_raw = constrain(
+    throttle1_raw,
+    throttle1Min,
+    throttle1Max);
+
+throttle2_raw = constrain(
+    throttle2_raw,
+    throttle2Min,
+    throttle2Max);
+
+    throttle1_scaled =
+    map(throttle1_raw,
+        throttle1Min,
+        throttle1Max,
+        0,
+        4095);
+
+throttle2_scaled =
+    map(throttle2_raw,
+        throttle2Min,
+        throttle2Max,
+        0,
+        4095);
+
+// Optional inversion
 if (invertThrottle1)
-  throttle1_scaled = 4095 - throttle1_scaled;
+{
+    throttle1_scaled = 4095 - throttle1_scaled;
+}
 
 if (invertThrottle2)
-  throttle2_scaled = 4095 - throttle2_scaled;
+{
+    throttle2_scaled = 4095 - throttle2_scaled;
+}
 
+// Clamp
 throttle1_scaled = constrain(throttle1_scaled, 0, 4095);
 throttle2_scaled = constrain(throttle2_scaled, 0, 4095);
+
 
 // Difference between channels
 throttle_diff =
@@ -516,11 +608,11 @@ uint16_t throttleAvg = (throttle1_scaled + throttle2_scaled) / 2;
 bool throttleActive = throttleAvg > 200;
 
 bool upPressed =
-  upBtn.stableState && gearNBtn.stableState && !throttleActive;
+  upBtn.stableState && gearNBtn.stableState;
 
 bool downPressed =
-  downBtn.stableState && gearNBtn.stableState && !throttleActive;
-
+  downBtn.stableState && gearNBtn.stableState;
+  
 // edge detect (prevent retrigger during active shift)
 bool upEdge = upPressed && !lastUpState && !shiftActive;
 bool downEdge = downPressed && !lastDownState && !shiftActive;
@@ -565,7 +657,7 @@ if (shiftActive)
   if (targetRatio > 0)
   {
     baseTarget =
-      ((targetRatio * vehicleSpeed * 1667 * 4.3) / 2080);
+      ((targetRatio * transmissionSpeed * 1667 * 4.3) / 2080);
   }
 }
 
@@ -588,16 +680,16 @@ if (shiftActive)
 
   bool neutralLost = !gearNBtn.stableState;
 
-  bool throttleCancel = throttleActive && minTimeElapsed;
+ 
 
   // End conditions:
   // - driver releases AFTER min time
-  // - throttle override AFTER min time
+  
   // - neutral lost AFTER delay (gear likely engaged)
   // - safety timeout
 
   if ((minTimeElapsed && !upPressed && !downPressed) ||
-      throttleCancel ||
+     
       (neutralExitAllowed && neutralLost) ||
       maxTimeExceeded)
   {
@@ -622,6 +714,16 @@ cruiseTarget = baseTarget * gearGain[g];
   if (cruiseActive)
     canio |= (1 << 0);   // cruise bit24
 
+    // -----------------------------
+// Unload drivetrain during shift
+// -----------------------------
+if (shiftActive)
+{
+    pot = 0;
+    pot2 = 0;
+    regenPreset = 0;
+}
+
   // ----- Rolling counters -----
   canrun1 = (canrun1 + 1) & 0x03;
   canrun2 = (canrun2 + 1) & 0x03;
@@ -645,6 +747,8 @@ cruiseTarget = baseTarget * gearGain[g];
 
   CanMsg msg(INVERTER_CMD_ID, 8, payload);
   CAN.write(msg);
+  canTxCount++;
+lastTxID = msg.id;
 }
 
 // --------------------------------------------------
@@ -656,7 +760,7 @@ void setup()
   serialConsoleInit();
   settingsLoad();
   
-
+pinMode(LED_BUILTIN, OUTPUT);
   pinMode(UP_pin, INPUT);
   pinMode(DOWN_pin, INPUT);
   pinMode(GearN_pin, INPUT);
@@ -699,16 +803,17 @@ void loop()
     sendOpenInverterCommand();
   }
 
-  while (now - lastDashUpdate >= 20)
-  {
-    lastDashUpdate += 20;
-    updatePCM();
-  }
+  //while (now - lastDashUpdate >= 50)
+ // {
+  //  lastDashUpdate += 50;
+    
+ // }
   
   while (now - lastPCMUpdate >= 75)
   {
     lastPCMUpdate += 75;
     sendPCMFrames();
+    updatePCM();
   }
   
 while (now - lastDebugUpdate >= 100)
@@ -735,37 +840,90 @@ while (now - lastDebugUpdate >= 100)
   while (CAN.available())
   {
     CanMsg msg = CAN.read();
+   canRxCount++;
+lastRxID = msg.id;
+if (canDumpEnabled)
+{
+    Serial.print(millis());
+
+    Serial.print(" RX 0x");
+
+    Serial.print(msg.id, HEX);
+
+    Serial.print(" [");
+
+    Serial.print(msg.data_length);
+
+    Serial.print("] ");
+
+    for (int i = 0; i < msg.data_length; i++)
+    {
+        if (msg.data[i] < 16)
+            Serial.print("0");
+
+        Serial.print(msg.data[i], HEX);
+
+        Serial.print(" ");
+    }
+
+    Serial.println();
+}
 
     // Motor RPM from inverter
-    if (msg.id == 10 && msg.data_length >= 2)
-    {
-      int rawRpm =
+if (msg.id == 10 && msg.data_length >= 2)
+{
+    inverterSeen = true;
+    lastInverterMessage = millis();
+   
+
+
+    int rawRpm =
         (msg.data[1] << 8) | msg.data[0];
 
-      if (rawRpm <= 10000)
+    if (rawRpm <= 10000)
         engineRPM = (int)((float)rawRpm * 3.85);
-      else
+    else
         engineRPM = 9000;
-    }
+}
 
     // Wheel speed from ABS
+   
     if (msg.id == 0x4B0 && msg.data_length >= 8)
-    {
-      int frontLeft =
+    
+{
+
+
+    int frontLeft =
         (msg.data[0] << 8) | msg.data[1];
 
-      int frontRight =
+    int frontRight =
         (msg.data[2] << 8) | msg.data[3];
 
-      int speedRaw =
-        ((frontLeft + frontRight) / 2) - 10000;
+    int rearLeft =
+        (msg.data[4] << 8) | msg.data[5];
 
-      vehicleSpeed = speedRaw / 100;
+    int rearRight =
+        (msg.data[6] << 8) | msg.data[7];
 
-      ODOus =
+    // Dash speed
+    vehicleSpeed =
+        (((frontLeft + frontRight) / 2) - 10000) / 100;
+
+    // Transmission speed
+    transmissionSpeed =
+        (((rearLeft + rearRight) / 2) - 10000) / 100;
+
+    ODOus =
         calcMicrosecODO(vehicleSpeed * 100);
-    }
+}
   }
+
+// Inverter comms timeout
+if (millis() - lastInverterMessage > 500)
+{
+    inverterSeen = false;
+    engineRPM = 0;
+}
 
   if (Serial.available())
   {
@@ -776,7 +934,7 @@ while (now - lastDebugUpdate >= 100)
   //Output fet control
   //-------------------------------------------------------
   // Oil Pump Control
-  if (engineRPM > 100)
+if (inverterSeen && engineRPM > 100)
 {
     lastEngineRun = millis();
 }
@@ -789,4 +947,27 @@ else
 {
     digitalWrite(Oil_pump, LOW);
 }
+
+// ---------------------------
+// Heartbeat LED
+// ---------------------------
+if (millis() - lastHeartbeat > 500)
+{
+    lastHeartbeat = millis();
+
+    heartbeatState = !heartbeatState;
+
+    digitalWrite(LED_BUILTIN, heartbeatState);
+}
+if (millis() - lastCanDebugTime >= 1000)
+{
+    lastCanDebugTime += 1000;
+
+    txPerSecond = canTxCount - lastTxSnapshot;
+    rxPerSecond = canRxCount - lastRxSnapshot;
+
+    lastTxSnapshot = canTxCount;
+    lastRxSnapshot = canRxCount;
+}
+
 }
