@@ -16,7 +16,277 @@ sends CAN messages to both the inverter and the RX‑8 dashboard.
 
 -   Dual-channel throttle input processing
 -   Gear‑based rev‑matching shift assist
--   CAN control of OpenInverter
+-   CAN control of OpenInverterRX-8 Electric VCU (Arduino Nano R4)
+Overview
+
+This project implements a Vehicle Control Unit (VCU) for an electric Mazda RX-8 using an Arduino Nano R4.
+
+The VCU acts as the central controller between the vehicle, the inverter and the original RX-8 dashboard.
+
+It provides:
+
+Dual channel throttle processing
+Paddle shift control
+Intelligent rev-matching
+CAN communication with OpenInverter
+RX-8 instrument cluster emulation
+Oil pump control
+EEPROM configuration
+Serial diagnostics and tuning
+
+The firmware is designed specifically for OpenInverter stm32-foc v5.40.R.
+
+Features
+Driver Controls
+Dual redundant throttle inputs
+Gear up paddle
+Gear down paddle
+Neutral switch
+Brake input
+Reverse input
+Ignition input
+Clutch input
+Rev Matching
+
+The VCU implements a fully automatic rev-match system.
+
+Features include:
+
+Torque ramp-down before disengagement
+Continuous rev matching while in neutral
+Vehicle speed tracking throughout the shift
+Automatic shift completion detection
+Configurable timeout
+Configurable torque ramp
+Independently adjustable upshift and downshift gains
+
+Unlike many implementations, the target RPM is recalculated continuously while the gearbox is in neutral, allowing the driver to pause during a shift without losing synchronisation.
+
+Gear Detection
+
+Current gear is calculated using:
+
+Motor RPM
+Road speed
+Tyre circumference
+Final drive ratio
+
+Current implementation:
+
+Tyre Size        225/40R19
+Final Drive      4.30
+
+Gear ratios:
+
+Gear	Ratio
+1	3.483
+2	2.015
+3	1.391
+4	1.000
+5	0.806
+
+The detected gear is used for:
+
+rev matching
+shift validation
+shift completion
+diagnostics
+Shift State Machine
+
+The shift logic is implemented as a deterministic state machine.
+
+IDLE
+ │
+ ▼
+TORQUE CUT
+ │
+ │ torque ramps to zero
+ ▼
+REV MATCH
+ │
+ │ continuously follows road speed
+ │
+ │ waits for:
+ │   • neutral released
+ │   • target gear detected
+ │   • gear stable for 50 ms
+ ▼
+IDLE
+
+If the shift is not completed within the configurable timeout, the shift is cancelled safely.
+
+Rev Match Calculation
+
+During every control cycle:
+
+Vehicle Speed
+
+↓
+
+Wheel RPM
+
+↓
+
+Gearbox Output RPM
+
+↓
+
+Target Gear Ratio
+
+↓
+
+Base Target RPM
+
+↓
+
+Upshift / Downshift Gain
+
+↓
+
+Cruise Target RPM
+
+↓
+
+CAN → OpenInverter
+
+Because the calculation runs continuously, changes in road speed while coasting in neutral automatically adjust the requested motor speed.
+
+CAN Communication
+OpenInverter
+
+CAN ID
+
+0x300
+
+Update period
+
+10 ms
+
+Contains:
+
+throttle commands
+cruise target RPM
+regen preset
+CANIO bits
+rolling counters
+CRC-8
+RX-8 Dashboard
+
+The VCU emulates the original Mazda PCM.
+
+Provides:
+
+tachometer
+speedometer
+coolant temperature
+warning lamps
+MIL
+oil pressure
+auxiliary status
+
+The dashboard RPM is scaled independently from the motor RPM, allowing accurate gear calculations while maintaining correct RX-8 gauge behaviour.
+
+Configuration
+
+All settings are stored in EEPROM.
+
+Current configurable parameters include:
+
+throttle calibration
+throttle inversion
+throttle correlation tolerance
+upshift gain
+downshift gain
+Serial Console
+
+The firmware includes a built-in serial console.
+
+Examples:
+
+settings
+
+save
+
+defaults
+
+set upgain 1.010
+
+set downgain 0.990
+
+set tdiff 300
+
+debug on
+Live Diagnostics
+
+The debug console displays live values including:
+
+Motor RPM
+Dashboard RPM
+Vehicle speed
+Wheel RPM
+Gearbox output RPM
+Calculated ratio
+Actual ratio
+Detected gear
+Shift state
+Rev-match target RPM
+CAN traffic
+Throttle values
+Digital inputs
+Inverter status
+
+Designed so drivetrain calculations can be verified while driving.
+
+Hardware
+
+Controller
+
+Arduino Nano R4
+
+CAN
+
+TJA1050
+
+Power Supply
+
+LM2596 Buck Converter
+
+Output Driver
+
+Logic level MOSFET
+
+Protection
+
+TVS diode
+Fuse
+Bulk capacitance
+Decoupling capacitors
+Project Status
+Current Status
+
+✔ Dual throttle control complete
+
+✔ CAN communication stable
+
+✔ RX-8 dashboard emulation working
+
+✔ EEPROM configuration complete
+
+✔ Automatic throttle calibration
+
+✔ Continuous gear detection
+
+✔ State machine based rev matching
+
+✔ Configurable torque ramp
+
+✔ Independent up/down rev-match tuning
+
+✔ Live serial diagnostics
+
+JLC PCB avaiable
+
+🚧 Further road tuning of rev-match gains
 -   CAN emulation for RX‑8 dashboard
 -   Auxiliary outputs (oil pump)
 
