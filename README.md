@@ -525,27 +525,26 @@ These determine:
     Ratiodown
 
 ------------------------------------------------------------------------
+*.
 
 # Shift Assist System
 
-Implements **rev‑matching gear changes**.
+The VCU implements a fully automatic paddle-shift rev-matching system for clutchless shifting up and down.
 
 Operation:
 
-1.  Driver presses UP or DOWN button
-2.  Current gear ratio calculated
-3.  Ratio is **latched**
-4.  While button held:
+Driver momentarily presses the UP or DOWN paddle.
+The VCU latches the current gear, shift direction and target gear.
+Torque is ramped smoothly to zero.
+Once the gearbox enters neutral, rev matching begins.
+The target motor speed is continuously recalculated from the current road speed, allowing the driver to pause in neutral without losing synchronisation.
+The shift completes automatically when:
+the gearbox leaves neutral,
+the target gear is detected,
+the detected gear remains stable for the configured confirmation time.
+If the shift is not completed within the safety timeout, the shift is cancelled and normal control resumes.
 
-```{=html}
-<!-- -->
-```
-    targetRPM = latched_ratio × vehicleSpeed
-
-Vehicle speed continues updating so the system keeps revs matched to
-transmission speed.
-
-Button release resets the shift system.
+Unlike earlier versions, the paddle switch only initiates the shift. The remainder of the shift sequence is handled autonomously by the VCU state machine and does not require the paddle to remain pressed.
 
 ------------------------------------------------------------------------
 
