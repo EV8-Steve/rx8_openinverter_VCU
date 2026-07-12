@@ -13,7 +13,8 @@ extern bool invertThrottle2;
 extern uint16_t throttleMaxDiff;
 
 // gear tuning
-extern float gearGain[6];   // index 1–5 used
+extern float upshiftGain;
+extern float downshiftGain;
 extern bool throttleCalMode;
 extern bool throttleCalWaitingMax;
 

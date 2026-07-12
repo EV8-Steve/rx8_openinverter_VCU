@@ -12,14 +12,18 @@
 #define ADDR_T2MIN          8
 #define ADDR_T2MAX         10
 
-#define ADDR_GEAR_GAIN     20
+#define ADDR_UPSHIFT_GAIN     20
+#define ADDR_DOWNSHIFT_GAIN   24
+#define ADDR_SETTINGS_MAGIC 12
+#define SETTINGS_MAGIC 0x56435531UL
 
 
 // extern variables from main
 extern bool invertThrottle1;
 extern bool invertThrottle2;
 extern uint16_t throttleMaxDiff;
-extern float gearGain[6];
+extern float upshiftGain;
+extern float downshiftGain;
 extern uint16_t throttle1Min;
 extern uint16_t throttle1Max;
 
@@ -35,27 +39,48 @@ uint16_t learnedT2Min = 0;
 uint16_t learnedT2Max = 0;
 
 
+
+bool settingsAreValid()
+{
+    uint32_t storedMagic = 0;
+
+    EEPROM.get(ADDR_SETTINGS_MAGIC, storedMagic);
+
+    return storedMagic == SETTINGS_MAGIC;
+}
 // --------------------------------------------------
 // LOAD
 // --------------------------------------------------
 void settingsLoad()
 {
-  invertThrottle1 = EEPROM.read(ADDR_T1INV) != 0;
-  invertThrottle2 = EEPROM.read(ADDR_T2INV) != 0;
+    // Check that EEPROM contains settings written by this VCU code
+    if (!settingsAreValid())
+    {
+        Serial.println("No valid EEPROM settings found");
+        Serial.println("Loading safe defaults");
 
-  EEPROM.get(ADDR_THROTTLE_DIFF, throttleMaxDiff);
-  EEPROM.get(ADDR_T1MIN, throttle1Min);
-EEPROM.get(ADDR_T1MAX, throttle1Max);
+        settingsDefaults();
+        settingsSave();
 
-EEPROM.get(ADDR_T2MIN, throttle2Min);
-EEPROM.get(ADDR_T2MAX, throttle2Max);
+        return;
+    }
 
-  for (int i = 1; i <= 5; i++)
-  {
-    EEPROM.get(ADDR_GEAR_GAIN + (i * sizeof(float)), gearGain[i]);
-  }
+    // Load throttle settings
+    invertThrottle1 = EEPROM.read(ADDR_T1INV) != 0;
+    invertThrottle2 = EEPROM.read(ADDR_T2INV) != 0;
 
-  Serial.println("Settings loaded");
+    EEPROM.get(ADDR_THROTTLE_DIFF, throttleMaxDiff);
+
+    EEPROM.get(ADDR_T1MIN, throttle1Min);
+    EEPROM.get(ADDR_T1MAX, throttle1Max);
+
+    EEPROM.get(ADDR_T2MIN, throttle2Min);
+    EEPROM.get(ADDR_T2MAX, throttle2Max);
+
+    EEPROM.get(ADDR_UPSHIFT_GAIN, upshiftGain);
+EEPROM.get(ADDR_DOWNSHIFT_GAIN, downshiftGain);
+
+    Serial.println("Settings loaded");
 }
 
 // --------------------------------------------------
@@ -73,11 +98,10 @@ EEPROM.put(ADDR_T1MAX, throttle1Max);
 EEPROM.put(ADDR_T2MIN, throttle2Min);
 EEPROM.put(ADDR_T2MAX, throttle2Max);
 
-  for (int i = 1; i <= 5; i++)
-  {
-    EEPROM.put(ADDR_GEAR_GAIN + (i * sizeof(float)), gearGain[i]);
-  }
+EEPROM.put(ADDR_UPSHIFT_GAIN, upshiftGain);
+EEPROM.put(ADDR_DOWNSHIFT_GAIN, downshiftGain);
 
+EEPROM.put(ADDR_SETTINGS_MAGIC, SETTINGS_MAGIC);
   Serial.println("Settings saved");
 }
 
@@ -95,12 +119,8 @@ throttle1Max = 795;
 
 throttle2Min = 211;
 throttle2Max = 683;
-
-  gearGain[1] = 1.00;
-  gearGain[2] = 1.00;
-  gearGain[3] = 1.00;
-  gearGain[4] = 1.00;
-  gearGain[5] = 1.00;
+upshiftGain = 1.000f;
+downshiftGain = 1.000f;
 
   Serial.println("Defaults loaded");
 }
@@ -137,15 +157,13 @@ void settingsPrint()
   Serial.print("T2 Max: ");
   Serial.println(throttle2Max);
 
-  Serial.println("Gear gains:");
+  Serial.println("Upshift gain:");
+  Serial.println(upshiftGain, 3);
 
-  for (int i = 1; i <= 5; i++)
-  {
-      Serial.print("Gear ");
-      Serial.print(i);
-      Serial.print(": ");
-      Serial.println(gearGain[i], 3);
-  }
+  Serial.println("Downshift gain:");
+  Serial.println(downshiftGain, 3);
+
+  
 
   Serial.println("------------------");
 }

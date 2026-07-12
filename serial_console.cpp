@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include "serial_console.h"
 #include "vcu_settings.h"
+#include <stdio.h>
 
 // --------------------------------------------------
 // External variables from main
@@ -8,10 +9,58 @@
 extern bool invertThrottle1;
 extern bool invertThrottle2;
 extern uint16_t throttleMaxDiff;
-extern float gearGain[6];
+extern float upshiftGain;
+extern float downshiftGain;
 extern bool debugEnabled;
 extern bool throttleCalMode;
 extern bool throttleCalWaitingMax;
+extern int engineRPM;
+extern int vehicleSpeed;
+extern int engTemp;
+extern int Gear;
+extern float Ratiocalc;
+extern int motorRPM;
+extern float Ratioact;
+extern float wheelRPM;
+extern float gearboxOutputRPM;
+extern uint16_t throttle1_scaled;
+extern uint16_t throttle2_scaled;
+extern uint16_t throttle_diff;
+extern uint8_t regenPreset;
+extern bool inverterSeen;
+extern bool throttleFault;
+extern bool clutchPressed;
+extern bool ignitionOn;
+extern bool reverseSelected;
+
+enum ShiftDirection
+{
+    SHIFT_UP,
+    SHIFT_DOWN
+};
+
+extern ShiftDirection shiftDirection;
+extern ShiftDirection shiftDirection;
+extern uint32_t pcmOverruns;
+
+extern bool upButton;
+extern bool downButton;
+extern bool neutralButton;
+
+extern bool brakePressed;
+
+extern uint16_t cruiseTarget;
+extern uint16_t shiftCruiseTarget;
+
+enum ShiftState
+{
+    SHIFT_IDLE,
+    SHIFT_TORQUE_CUT,
+    SHIFT_REV_MATCH,
+   };
+
+extern ShiftState shiftState;
+
 // CAN diagnostics
 extern uint32_t canTxCount;
 extern uint32_t canRxCount;
@@ -45,6 +94,43 @@ static String inputBuffer;
 // Forward declarations
 void handleCommand(String cmd);
 void processSetCommand(String cmd);
+
+///////helpers/////////
+
+
+void printYesNo(bool state)
+{
+    Serial.println(state ? "YES" : "NO");
+
+
+}
+
+//--------------------------------------------------
+// Dashboard helpers
+//--------------------------------------------------
+
+void clearScreen()
+{
+    // ANSI clear screen + cursor home
+    Serial.print("\033[2J");
+    Serial.print("\033[H");
+}
+
+void printLine(const char *label)
+{
+    Serial.print(label);
+
+    int spaces = 24 - strlen(label);
+
+    while (spaces-- > 0)
+        Serial.print(' ');
+}
+
+void printBool(bool state)
+{
+    Serial.println(state ? "YES" : "NO");
+}
+
 
 // --------------------------------------------------
 void serialConsoleInit()
@@ -104,7 +190,8 @@ void handleCommand(String cmd)
         Serial.println("set t1max N");
         Serial.println("set t2min N");
         Serial.println("set t2max N");
-        Serial.println("set gain G V");
+        Serial.println("set upgain V");
+        Serial.println("set downgain V");
         Serial.println("------------------");
     }
 
@@ -336,36 +423,137 @@ else if (cmd.startsWith("set t2max "))
     Serial.println(throttle2Max);
 }
 
-  // ---------- GEAR GAIN ----------
-  else if (cmd.startsWith("set gain "))
-  {
-    int gear = cmd.substring(9, 10).toInt();
+  // ---------- Shift GAIN ----------
+  else if (cmd.startsWith("set upgain "))
+{
     float val = cmd.substring(11).toFloat();
 
-    if (gear >= 1 && gear <= 5)
+    if (val >= 0.5f && val <= 1.5f)
     {
-      if (val > 0.5 && val < 1.5)
-      {
-        gearGain[gear] = val;
-
-        Serial.print("Gear ");
-        Serial.print(gear);
-        Serial.print(" gain = ");
-        Serial.println(val, 3);
-      }
-      else
-      {
-        Serial.println("Gain out of range (0.5–1.5)");
-      }
+        upshiftGain = val;
+        settingsSave();
+        Serial.print("Upshift gain = ");
+        Serial.println(upshiftGain, 3);
     }
     else
     {
-      Serial.println("Invalid gear (1–5)");
+        Serial.println("Gain out of range (0.5-1.5)");
     }
-  }
+}
+else if (cmd.startsWith("set downgain "))
+{
+    float val = cmd.substring(13).toFloat();
+
+    if (val >= 0.5f && val <= 1.5f)
+    {
+        downshiftGain = val;
+        settingsSave();
+        Serial.print("Downshift gain = ");
+        Serial.println(downshiftGain, 3);
+    }
+    else
+    {
+        Serial.println("Gain out of range (0.5-1.5)");
+    }
+}
 
   else
   {
     Serial.println("Unknown SET command");
   }
+}
+
+  //--------------------------------------------
+// Serial debuging
+//--------------------------------------------
+void debugOutput()
+{
+
+  const char* shiftStateText = "UNKNOWN";
+
+switch (shiftState)
+{
+    case SHIFT_IDLE:
+        shiftStateText = "IDLE";
+        break;
+
+    case SHIFT_TORQUE_CUT:
+        shiftStateText = "CUT";
+        break;
+
+    case SHIFT_REV_MATCH:
+        shiftStateText = "MATCH";
+        break;
+
+    
+}
+    static char screen[768];
+size_t len = 0;
+
+    len += snprintf(screen + len,
+                sizeof(screen) - len,
+                "\n\n"
+                "==============================================================\n"
+                "                    RX-8 EV VCU\n"
+                "==============================================================\n");
+
+                len += snprintf(screen + len,
+                sizeof(screen) - len,
+                "MRPM:%5d DRPM:%5d SPD:%3dkm/h TMP:%3dC\n",
+                motorRPM,
+                engineRPM,
+                vehicleSpeed,
+                engTemp);
+
+                len += snprintf(screen + len,
+                sizeof(screen) - len,
+                "WRPM:%5.1f GBOX:%5.1f G:%1d RC:%1.3f RA:%1.3f\n",
+                wheelRPM,
+                gearboxOutputRPM,
+                Gear,
+                Ratiocalc,
+                Ratioact);
+
+                len += snprintf(screen + len,
+                sizeof(screen) - len,
+                "T1:%4d  T2:%4d  D:%3d  REG:%2d%%\n",
+                throttle1_scaled,
+                throttle2_scaled,
+                throttle_diff,
+                regenPreset);
+
+                len += snprintf(screen + len,
+                sizeof(screen) - len,
+                "UP:%d DN:%d N:%d BR:%d CL:%d IGN:%d REV:%d\n",
+                upButton,
+                downButton,
+                neutralButton,
+                brakePressed,
+                clutchPressed,
+                ignitionOn,
+                reverseSelected);
+
+              len += snprintf(screen + len,
+                sizeof(screen) - len,
+                "SH:%s RTGT:%4d CAN:%4d U:%1.3f D:%1.3f\n",
+                shiftStateText,
+                shiftCruiseTarget,
+                cruiseTarget,
+                upshiftGain,
+                downshiftGain);
+                
+                len += snprintf(screen + len,
+                sizeof(screen) - len,
+                "INV:%d TF:%d TX:%3lu RX:%3lu PCM:%lu\n",
+                inverterSeen,
+                throttleFault,
+                txPerSecond,
+                rxPerSecond,
+                pcmOverruns);
+
+                len += snprintf(screen + len,
+                sizeof(screen) - len,
+                "==============================================================\n");
+
+                Serial.print(screen);
 }
