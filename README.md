@@ -1,309 +1,378 @@
-# RX-8 Electric VCU (Arduino Nano R4)
+# RX-8 Electric VCU
+
+**Arduino Nano R4 based Vehicle Control Unit for the electric Mazda RX-8**
+
+This project is an open-source Vehicle Control Unit (VCU) developed specifically for an electric-converted Mazda RX-8.
+
+The VCU sits between the vehicle's original controls and instrumentation and an **OpenInverter STM32-Foc based motor controller**, providing the vehicle-level logic required to make the electric drivetrain behave like an integrated part of the car.
+
+---
 
 ## Overview
 
-This project implements a **Vehicle Control Unit (VCU)** based on an
-**Arduino Nano R4** to interface between:
+The VCU is based around an **Arduino Nano R4** and provides the interface between:
 
--   Mazda RX‑8 instrument cluster
--   OpenInverter running **stm32‑foc v5.40.R**
--   Vehicle sensors and control inputs
+* Mazda RX-8 driver controls and sensors
+* Original RX-8 instrument cluster
+* OpenInverter motor controller
+* Manual gearbox and paddle-shift controls
+* Auxiliary vehicle systems
 
-The VCU reads analog and digital inputs, processes vehicle state, and
-sends CAN messages to both the inverter and the RX‑8 dashboard.
+The firmware handles vehicle inputs, drivetrain state, gear detection, shift assistance, traction control and CAN communications.
 
-### Primary Functions
+The current firmware is developed around:
 
--   Dual-channel throttle input processing
--   Gear‑based rev‑matching shift assist
--   CAN control of OpenInverterRX-8 Electric VCU (Arduino Nano R4)
-Overview
+**OpenInverter / STM32-Foc v5.40.R**
 
-This project implements a Vehicle Control Unit (VCU) for an electric Mazda RX-8 using an Arduino Nano R4.
+---
 
-The VCU acts as the central controller between the vehicle, the inverter and the original RX-8 dashboard.
+# Features
 
-It provides:
+## Driver Controls
 
-Dual channel throttle processing
-Paddle shift control
-Intelligent rev-matching
-CAN communication with OpenInverter
-RX-8 instrument cluster emulation
-Oil pump control
-EEPROM configuration
-Serial diagnostics and tuning
+The VCU supports:
 
-The firmware is designed specifically for OpenInverter stm32-foc v5.40.R.
+* Dual-channel accelerator pedal
+* Paddle upshift
+* Paddle downshift
+* Neutral switch
+* Brake input
+* Reverse input
+* Ignition input
+* Clutch input
 
-Features
-Driver Controls
-Dual redundant throttle inputs
-Gear up paddle
-Gear down paddle
-Neutral switch
-Brake input
-Reverse input
-Ignition input
-Clutch input
-Rev Matching
+The accelerator pedal uses two independent channels and is checked for correct correlation before being passed to the inverter.
 
-The VCU implements a fully automatic rev-match system.
+---
 
-Features include:
+## Paddle Shift Assist
 
-Torque ramp-down before disengagement
-Continuous rev matching while in neutral
-Vehicle speed tracking throughout the shift
-Automatic shift completion detection
-Configurable timeout
-Configurable torque ramp
-Independently adjustable upshift and downshift gains
+The RX-8 retains its manual gearbox.
 
-Unlike many implementations, the target RPM is recalculated continuously while the gearbox is in neutral, allowing the driver to pause during a shift without losing synchronisation.
+The VCU provides an automatic clutchless shift-assistance system which controls motor torque and speed during gear changes.
 
-Gear Detection
+A paddle press initiates the shift. The VCU then manages the remainder of the sequence automatically.
 
-Current gear is calculated using:
+### Shift sequence
 
-Motor RPM
-Road speed
-Tyre circumference
-Final drive ratio
+```text
+             PADDLE INPUT
+                  │
+                  ▼
+              SHIFT START
+                  │
+                  ▼
+             TORQUE RAMP
+                  │
+                  │ Motor torque
+                  │ reduced to zero
+                  ▼
+              NEUTRAL
+                  │
+                  ▼
+             REV MATCH
+                  │
+                  │ Target RPM continuously
+                  │ follows vehicle speed
+                  ▼
+            TARGET GEAR
+                  │
+                  ▼
+          GEAR CONFIRMATION
+                  │
+                  ▼
+              SHIFT DONE
+```
 
-Current implementation:
+The paddle does **not** need to remain pressed after the shift has been initiated.
 
-Tyre Size        225/40R19
-Final Drive      4.30
+### Rev matching
 
-Gear ratios:
+The target motor speed is calculated from:
 
-Gear	Ratio
-1	3.483
-2	2.015
-3	1.391
-4	1.000
-5	0.806
+* Vehicle speed
+* Wheel RPM
+* Gearbox output speed
+* Target gear ratio
+* Final drive ratio
+* Configured shift gain
 
-The detected gear is used for:
+The target is continuously recalculated while the gearbox is in neutral.
 
-rev matching
-shift validation
-shift completion
-diagnostics
-Shift State Machine
+This is important because the driver can pause during a shift and the VCU will continue to track the required motor speed as the vehicle slows or accelerates.
 
-The shift logic is implemented as a deterministic state machine.
+### Shift torque control
 
-IDLE
- │
- ▼
-TORQUE CUT
- │
- │ torque ramps to zero
- ▼
-REV MATCH
- │
- │ continuously follows road speed
- │
- │ waits for:
- │   • neutral released
- │   • target gear detected
- │   • gear stable for 50 ms
- ▼
-IDLE
+Torque reduction during a shift is performed using a configurable torque ramp.
 
-If the shift is not completed within the configurable timeout, the shift is cancelled safely.
+Torque ramp values are expressed as:
 
-Rev Match Calculation
+**% change per 10 ms control cycle**
 
-During every control cycle:
+This makes the tuning parameters directly relate to the VCU's 10 ms inverter control loop.
 
+Upshift and downshift behaviour can be tuned independently.
+
+---
+
+# Traction Control
+
+The VCU now includes drivetrain traction-control logic.
+
+Traction control operates by reducing the torque request when excessive wheel slip is detected.
+
+The system is integrated with the existing torque-command path rather than directly controlling the inverter's phase current.
+
+This allows the VCU to request a controlled reduction in drivetrain torque while leaving the inverter responsible for its normal:
+
+* Current limits
+* Torque control
+* Motor control
+* Ramp limiting
+* Protection functions
+
+Traction-control tuning is currently being developed through vehicle testing.
+
+The torque reduction/ramp system uses the same **% per 10 ms** representation used by the shift-assist torque control.
+
+### Current development status
+
+Initial road testing has demonstrated effective traction control behaviour in second gear.
+
+First-gear intervention is currently being tuned to reduce the aggressiveness of the initial torque cut.
+
+---
+
+# Gear Detection
+
+The VCU determines the current gearbox ratio from motor speed and vehicle speed.
+
+The calculation uses:
+
+* Motor RPM
+* Vehicle speed
+* Tyre circumference
+* Final drive ratio
+
+Current drivetrain configuration:
+
+| Parameter   |     Value |
+| ----------- | --------: |
+| Tyre        | 225/40R19 |
+| Final drive |      4.30 |
+
+### Gear ratios
+
+| Gear | Ratio |
+| ---: | ----: |
+|    1 | 3.483 |
+|    2 | 2.015 |
+|    3 | 1.391 |
+|    4 | 1.000 |
+|    5 | 0.806 |
+
+The detected gear is used by:
+
+* Rev matching
+* Shift validation
+* Shift completion detection
+* Traction-control logic
+* Diagnostics
+
+The gear calculation is deliberately independent of the dashboard RPM signal so that the drivetrain calculations can use the actual motor speed.
+
+---
+
+# Rev-Match Calculation
+
+The target RPM calculation follows the drivetrain through several stages:
+
+```text
 Vehicle Speed
-
-↓
-
-Wheel RPM
-
-↓
-
+      │
+      ▼
+   Wheel RPM
+      │
+      ▼
 Gearbox Output RPM
+      │
+      ▼
+ Target Gear Ratio
+      │
+      ▼
+ Base Target RPM
+      │
+      ▼
+ Shift Gain
+      │
+      ▼
+ Target Motor RPM
+      │
+      ▼
+ CAN → OpenInverter
+```
 
-↓
+Because this calculation is performed continuously, the requested motor speed remains synchronised with the vehicle throughout the shift.
 
-Target Gear Ratio
+---
 
-↓
+# CAN Communication
 
-Base Target RPM
+The VCU communicates with the OpenInverter controller over a **500 kbit/s CAN bus**.
 
-↓
+## OpenInverter control frame
 
-Upshift / Downshift Gain
+| Parameter  | Value         |
+| ---------- | ------------- |
+| CAN ID     | `0x300`       |
+| Period     | 10 ms         |
+| Bus speed  | 500 kbps      |
+| Byte order | Little-endian |
+| Payload    | 8 bytes       |
 
-↓
+The frame contains:
 
-Cruise Target RPM
+* Throttle channel 1
+* Throttle channel 2
+* CANIO bits
+* Rolling counter 1
+* Cruise target RPM
+* Rolling counter 2
+* Regen preset
+* CRC-8
 
-↓
+### Frame layout
 
-CAN → OpenInverter
+| Bits  | Field             |
+| ----- | ----------------- |
+| 0–11  | Throttle pot 1    |
+| 12–23 | Throttle pot 2    |
+| 24–29 | CANIO             |
+| 30–31 | Rolling counter 1 |
+| 32–45 | Cruise target     |
+| 46–47 | Rolling counter 2 |
+| 48–55 | Regen preset      |
+| 56–63 | CRC               |
 
-Because the calculation runs continuously, changes in road speed while coasting in neutral automatically adjust the requested motor speed.
+### CRC
 
-CAN Communication
-OpenInverter
-
-CAN ID
-
-0x300
-
-Update period
-
-10 ms
-
-Contains:
-
-throttle commands
-cruise target RPM
-regen preset
-CANIO bits
-rolling counters
+```text
 CRC-8
-RX-8 Dashboard
+Polynomial : 0x07
+Initial    : 0x00
+Reflection : None
+Final XOR  : None
+```
 
-The VCU emulates the original Mazda PCM.
+Two independent 2-bit rolling counters are incremented on each transmitted frame.
 
-Provides:
+The OpenInverter firmware remains responsible for the final torque/current control and associated safety limits.
 
-tachometer
-speedometer
-coolant temperature
-warning lamps
-MIL
-oil pressure
-auxiliary status
+---
 
-The dashboard RPM is scaled independently from the motor RPM, allowing accurate gear calculations while maintaining correct RX-8 gauge behaviour.
+# RX-8 Instrument Cluster
 
-Configuration
+The VCU emulates the functions normally provided by the RX-8 PCM.
 
-All settings are stored in EEPROM.
+This allows the original dashboard to remain in the vehicle.
+
+The system provides information including:
+
+* Engine/motor RPM
+* Vehicle speed
+* Coolant temperature
+* Warning lamps
+* MIL
+* Oil pressure
+* Auxiliary status
+
+## Dashboard CAN frame
+
+| Parameter  | Value      |
+| ---------- | ---------- |
+| CAN ID     | `0x201`    |
+| Period     | 20 ms      |
+| Byte order | Big-endian |
+
+Current documented fields include:
+
+| Bytes | Data          |
+| ----- | ------------- |
+| 0–1   | Engine RPM    |
+| 4–5   | Vehicle speed |
+
+Dashboard RPM scaling is independent of the motor RPM used internally by the drivetrain calculations.
+
+This allows the original RX-8 tachometer behaviour to be maintained without compromising gear detection.
+
+---
+
+# Configuration
+
+Configuration parameters are stored in the Arduino's EEPROM.
 
 Current configurable parameters include:
 
-throttle calibration
-throttle inversion
-throttle correlation tolerance
-upshift gain
-downshift gain
-Serial Console
+* Throttle calibration
+* Throttle inversion
+* Throttle correlation tolerance
+* Upshift gain
+* Downshift gain
+* Torque ramp rates
+* Shift timeout
+* Gear confirmation timing
+* Traction-control parameters
 
-The firmware includes a built-in serial console.
+The configuration system is intended to allow drivetrain calibration without recompiling the firmware.
 
-Examples:
+---
 
+# Serial Console
+
+A built-in serial diagnostic and tuning console is provided.
+
+Example commands:
+
+```text
 settings
-
 save
-
 defaults
 
 set upgain 1.010
-
 set downgain 0.990
-
 set tdiff 300
 
 debug on
-Live Diagnostics
+```
 
-The debug console displays live values including:
+The console is also used during vehicle testing to monitor drivetrain behaviour and tune the control algorithms.
 
-Motor RPM
-Dashboard RPM
-Vehicle speed
-Wheel RPM
-Gearbox output RPM
-Calculated ratio
-Actual ratio
-Detected gear
-Shift state
-Rev-match target RPM
-CAN traffic
-Throttle values
-Digital inputs
-Inverter status
+---
 
-Designed so drivetrain calculations can be verified while driving.
+# Live Diagnostics
 
-Hardware
+The diagnostic output can display live values including:
 
-Controller
+* Motor RPM
+* Dashboard RPM
+* Vehicle speed
+* Wheel RPM
+* Gearbox output RPM
+* Calculated gear ratio
+* Actual gear ratio
+* Detected gear
+* Shift state
+* Rev-match target RPM
+* Torque request
+* Traction-control state
+* CAN traffic
+* Throttle values
+* Digital inputs
+* Inverter status
 
-Arduino Nano R4
+The diagnostic system is particularly useful for validating drivetrain calculations during road testing.
 
-CAN
-
-TJA1050
-
-Power Supply
-
-LM2596 Buck Converter
-
-Output Driver
-
-Logic level MOSFET
-
-Protection
-
-TVS diode
-Fuse
-Bulk capacitance
-Decoupling capacitors
-Project Status
-Current Status
-
-✔ Dual throttle control complete
-
-✔ CAN communication stable
-
-✔ RX-8 dashboard emulation working
-
-✔ EEPROM configuration complete
-
-✔ Automatic throttle calibration
-
-✔ Continuous gear detection
-
-✔ State machine based rev matching
-
-✔ Configurable torque ramp
-
-✔ Independent up/down rev-match tuning
-
-✔ Live serial diagnostics
-
-JLC PCB avaiable
-
-🚧 Further road tuning of rev-match gains
--   CAN emulation for RX‑8 dashboard
--   Auxiliary outputs (oil pump)
-
-------------------------------------------------------------------------
-
-# System Architecture
-
-    Vehicle Sensors
-          │
-          ▼
-    Arduino Nano R4 (VCU)
-          │
-          ├── CAN → OpenInverter (motor control)
-          │
-          └── CAN → RX‑8 Dashboard
-
-------------------------------------------------------------------------
+---
 
 # Hardware
 
@@ -311,329 +380,375 @@ JLC PCB avaiable
 
 **Arduino Nano R4**
 
-Features used:
+The Nano R4 provides:
 
--   Native CAN controller
--   10‑bit ADC
--   Digital GPIO
--   millis() non‑blocking timers
--   5V logic system
+* Native CAN controller
+* ADC inputs
+* Digital GPIO
+* Non-blocking timing
+* 5 V logic
 
-------------------------------------------------------------------------
-
-## Power System
-
-Input supply:
-
-    10–20V Automotive Input
-          │
-          ▼
-    TVS Diode Protection
-          │
-          ▼
-    Fuse
-          │
-          ▼
-    Buck Converter (LM2596)
-          │
-          ▼
-    Stable 5V Rail
-
-The 5V rail powers:
-
--   Nano R4
--   CAN transceiver
--   throttle sensors
--   digital inputs
-
-Filtering includes bulk capacitors and 100nF decoupling.
-
-------------------------------------------------------------------------
-
-# CAN Network
+---
 
 ## CAN Transceiver
 
 **TJA1050**
 
-  MCU   TJA1050
-  ----- ---------
-  D10   TXD
-  D13   RXD
+Current CAN interface:
 
-Bus:
-
--   CANH
--   CANL
--   Optional 120Ω termination
+```text
+Arduino Nano R4
+       │
+       ▼
+    TJA1050
+       │
+       ├── CANH
+       └── CANL
+```
 
 Bus speed:
 
-    500 kbps
+```text
+500 kbps
+```
 
-------------------------------------------------------------------------
+A 120 Ω termination resistor can be fitted where required by the vehicle CAN topology.
+
+---
+
+# Power Supply
+
+The VCU is designed for automotive 12 V electrical systems.
+
+```text
+10–20 V Automotive Supply
+          │
+          ▼
+    TVS Protection
+          │
+          ▼
+         Fuse
+          │
+          ▼
+    LM2596 Buck
+          │
+          ▼
+       5 V Rail
+          │
+     ┌────┼────┐
+     ▼    ▼    ▼
+   Nano  CAN  Inputs
+```
+
+Protection and filtering include:
+
+* TVS diode
+* Fuse
+* Bulk capacitance
+* Local decoupling
+* 100 nF bypass capacitors
+
+---
 
 # Inputs
 
-## Throttle Pedal (Dual Channel)
+## Dual Throttle
 
-  Input            Pin
-  ---------------- -----
-  Throttle Pot 1   A0
-  Throttle Pot 2   A1
+| Input              | Pin |
+| ------------------ | --- |
+| Throttle channel 1 | A0  |
+| Throttle channel 2 | A1  |
 
-Voltage characteristics:
+Typical pedal characteristics:
 
-  Pot    Behaviour
-  ------ -----------------
-  Pot1   0‑5V increasing
-  Pot2   5‑0V inverted
+| Channel | Behaviour        |
+| ------- | ---------------- |
+| Pot 1   | 0–5 V increasing |
+| Pot 2   | 5–0 V decreasing |
 
-ADC scaling:
+The Nano R4 ADC values are scaled into the 12-bit range expected by the OpenInverter interface.
 
-    10‑bit ADC → 12‑bit (0‑4095)
+```text
+10-bit ADC
+    │
+    ▼
+12-bit command
+0–4095
+```
 
-Second channel inversion:
+The second channel is inverted in software.
 
-    pot2 = 4095 - (ADC × 4)
+Throttle plausibility and final safety handling remain part of the OpenInverter control system.
 
-Safety checks handled by OpenInverter firmware.
+---
 
-------------------------------------------------------------------------
+# Digital Inputs
 
-## Digital Inputs
+The current documented inputs are:
 
-Each input uses **100kΩ pulldown resistors**.
+| Pin | Function  |
+| --- | --------- |
+| D4  | Gear UP   |
+| D5  | Gear DOWN |
+| D7  | Neutral   |
 
-  Pin   Function
-  ----- --------------
-  D4    Gear UP
-  D5    Gear DOWN
-  D7    Gear Neutral
+Inputs use external pulldown resistors and software debounce.
 
-Inputs are debounced in software (15ms).
+---
 
-------------------------------------------------------------------------
+# Auxiliary Outputs
 
-# Outputs
+## Oil Pump
 
-## Oil Pump Control
+The VCU includes an auxiliary output for oil-pump control.
 
-Output:
+```text
+Output: D6
+```
 
-    D6
+The output drives a logic-level N-channel MOSFET configured as a low-side switch.
 
-Driver:
+Hardware includes:
 
-    Logic level N‑MOSFET
-    Low‑side switching
+* Gate resistor
+* Gate pulldown
+* Flyback diode
 
-Includes:
+The oil-pump logic is based on engine/motor RPM and a configurable timing period.
 
--   100Ω gate resistor
--   100k gate pulldown
--   flyback diode
+---
 
-Logic:
+# Software Architecture
 
-    If engineRPM ≤ 100
-        start timer
-    If timer ≥ 3000 cycles
-        disable pump
-    Else
-        pump ON
+The firmware is designed around a non-blocking control architecture.
 
-------------------------------------------------------------------------
+Major functions include:
 
-# CAN Messaging
+```cpp
+updateDebounce()
+calcGear()
+updatePCM()
+sendOpenInverterCommand()
+computeCRC8()
+```
 
-## OpenInverter Control Frame
+The main control flow is approximately:
 
-  Parameter     Value
-  ------------- ---------------
-  CAN ID        0x300
-  Update Rate   10ms
-  Endianness    Little‑endian
+```text
+Read Inputs
+     │
+     ▼
+Update Vehicle State
+     │
+     ├── Gear Detection
+     ├── Shift State Machine
+     ├── Rev Match
+     └── Traction Control
+     │
+     ▼
+Update Dashboard
+     │
+     ▼
+Generate OpenInverter Command
+     │
+     ▼
+Transmit CAN
+     │
+     ▼
+Process Incoming CAN
+     │
+     ▼
+Update Auxiliary Outputs
+```
 
-Payload layout:
+Timing is non-blocking and based on the Arduino timing facilities.
 
-  Bits    Field
-  ------- ---------------
-  0‑11    throttle pot1
-  12‑23   throttle pot2
-  24‑29   CANIO
-  30‑31   counter1
-  32‑45   cruise target
-  46‑47   counter2
-  48‑55   regen preset
-  56‑63   CRC
-
-CRC parameters:
-
-    CRC‑8
-    Polynomial: 0x07
-    Initial: 0x00
-    No reflection
-    No final XOR
-
-Rolling counters: 2‑bit counters increment every frame.
-
-------------------------------------------------------------------------
-
-## RX‑8 Dashboard Message
-
-  Parameter     Value
-  ------------- ------------
-  CAN ID        0x201
-  Update Rate   20ms
-  Endianness    Big‑endian
-
-Fields:
-
-  Bytes   Data
-  ------- ---------------
-  0‑1     Engine RPM
-  4‑5     Vehicle speed
-
-------------------------------------------------------------------------
-
-# Gear Detection Logic
-
-Gear ratio estimated from:
-
-    engineRPM
-    vehicleSpeed
-
-Formula:
-
-    ratio = (engineRPM × tyre_circumference) /
-            (vehicleSpeed × 1667 × final_drive)
-
-Example ratios:
-
-  Gear   Ratio
-  ------ -------
-  1      3.483
-  2      2.015
-  3      1.391
-  4      1.000
-  5      0.806
-
-These determine:
-
-    Ratioup
-    Ratiodown
-
-------------------------------------------------------------------------
-*.
-
-# Shift Assist System
-
-The VCU implements a fully automatic paddle-shift rev-matching system for clutchless shifting up and down.
-
-Operation:
-
-Driver momentarily presses the UP or DOWN paddle.
-The VCU latches the current gear, shift direction and target gear.
-Torque is ramped smoothly to zero.
-Once the gearbox enters neutral, rev matching begins.
-The target motor speed is continuously recalculated from the current road speed, allowing the driver to pause in neutral without losing synchronisation.
-The shift completes automatically when:
-the gearbox leaves neutral,
-the target gear is detected,
-the detected gear remains stable for the configured confirmation time.
-If the shift is not completed within the safety timeout, the shift is cancelled and normal control resumes.
-
-Unlike earlier versions, the paddle switch only initiates the shift. The remainder of the shift sequence is handled autonomously by the VCU state machine and does not require the paddle to remain pressed.
-
-------------------------------------------------------------------------
+---
 
 # Control Loop Timing
 
-  Task                   Period
-  ---------------------- ------------
-  OpenInverter control   10 ms
-  Dashboard update       20 ms
-  Input debounce         continuous
+| Task                     |     Period |
+| ------------------------ | ---------: |
+| OpenInverter control     |      10 ms |
+| Dashboard CAN            |      20 ms |
+| Input processing         | Continuous |
+| Shift control            |      10 ms |
+| Torque ramp calculations |      10 ms |
 
-Scheduling uses `millis()` (non‑blocking).
+The 10 ms control period is also the basis for the torque-ramp tuning system.
 
-------------------------------------------------------------------------
+Torque ramp parameters are therefore expressed as:
 
-# Software Structure
+```text
+% torque per 10 ms
+```
 
-Core functions:
+This provides a consistent unit for both shift-assist and traction-control torque management.
 
-    updateDebounce()
-    calcGear()
-    updatePCM()
-    sendOpenInverterCommand()
-    computeCRC8()
-
-Main loop flow:
-
-    Read inputs
-     → Update dashboard
-     → Send inverter control frame
-     → Process incoming CAN
-     → Update outputs
-
-------------------------------------------------------------------------
+---
 
 # Responsibility Split
 
-## VCU (Arduino)
+The VCU and OpenInverter deliberately have different responsibilities.
 
-Handles:
+## VCU
 
--   sensor reading
--   shift assist logic
--   CAN frame formatting
--   dashboard emulation
--   auxiliary outputs
+The VCU handles:
+
+* Vehicle inputs
+* Throttle processing
+* Gear detection
+* Paddle shift logic
+* Rev matching
+* Traction-control torque requests
+* Torque ramp generation
+* CAN frame generation
+* CAN CRC and rolling counters
+* RX-8 dashboard emulation
+* Auxiliary outputs
+* EEPROM configuration
+* Diagnostics
 
 ## OpenInverter
 
-Handles:
+OpenInverter handles:
 
--   throttle safety
--   torque control
--   current limits
--   ramp limits
--   motor control
+* Motor control
+* Torque/current control
+* Current limits
+* Motor protection
+* Inverter protection
+* Final torque application
+* Hardware-level control loops
+* Configured inverter ramp limits
 
-------------------------------------------------------------------------
+This separation keeps vehicle-level logic in the VCU while leaving the inverter responsible for the low-level motor-control and protection functions.
+
+---
+
+# System Architecture
+
+```text
+                    RX-8 DRIVER
+                         │
+          ┌──────────────┼──────────────┐
+          │              │              │
+      Throttle        Paddles       Vehicle
+      Sensors          / Gear        Inputs
+          │              │              │
+          └──────────────┼──────────────┘
+                         │
+                         ▼
+                ┌─────────────────┐
+                │  Arduino Nano   │
+                │      R4 VCU      │
+                └─────────────────┘
+                    │           │
+             CAN    │           │    CAN
+                    │           │
+                    ▼           ▼
+            OpenInverter      RX-8
+             Controller     Instrument
+                            Cluster
+                    │
+                    ▼
+               Electric Motor
+                    │
+                    ▼
+               Manual Gearbox
+```
+
+---
 
 # Hardware Summary
 
-Major components:
+| Component          | Purpose                          |
+| ------------------ | -------------------------------- |
+| Arduino Nano R4    | Main VCU                         |
+| TJA1050            | CAN transceiver                  |
+| LM2596             | Automotive supply buck converter |
+| Logic-level MOSFET | Auxiliary output driver          |
+| TVS diode          | Supply protection                |
+| Fuse               | Supply protection                |
 
-  Component         Purpose
-  ----------------- ----------------------
-  Arduino Nano R4   Vehicle Control Unit
-  TJA1050           CAN transceiver
-  LM2596            DC‑DC converter
-  Logic MOSFET      output switching
-  TVS diode         input protection
+A dedicated PCB has been developed for the VCU and is available as a JLCPCB-manufactured board.
 
-------------------------------------------------------------------------
+---
 
-# Key Design Features
+# Current Project Status
 
--   deterministic CAN timing
--   rev‑matching shift assist
--   dual‑channel throttle support
--   automotive power protection
--   modular architecture
+## Implemented
 
-------------------------------------------------------------------------
+* [x] Arduino Nano R4 VCU
+* [x] Dual-channel throttle processing
+* [x] Automatic throttle calibration
+* [x] Throttle plausibility checking
+* [x] OpenInverter CAN communication
+* [x] CRC-8 generation
+* [x] Dual rolling counters
+* [x] RX-8 dashboard CAN interface
+* [x] Gear detection
+* [x] Paddle shift state machine
+* [x] Automatic shift sequencing
+* [x] Continuous neutral rev matching
+* [x] Configurable upshift/downshift gains
+* [x] Configurable torque ramping
+* [x] Torque ramp units changed to % per 10 ms
+* [x] EEPROM configuration
+* [x] Serial tuning console
+* [x] Live diagnostics
+* [x] Traction-control implementation
+* [x] Initial road testing of traction control
+* [x] Dedicated VCU PCB
 
-# Project Status
+## Currently Being Tuned
 
-Current state:
+* [ ] Traction-control torque intervention
+* [ ] First-gear traction-control behaviour
+* [ ] Shift torque-ramp calibration
+* [ ] Upshift/downshift rev-match gains
+* [ ] Road testing and drivetrain calibration
 
--   CAN messaging functional
--   shift assist logic implemented
--   hardware architecture defined
--   KiCad schematic development in progress
--   firmware ready for testing
+The firmware is now being developed through **real vehicle testing**, with the control parameters being progressively tuned to suit the RX-8 drivetrain and the electric motor/inverter combination.
+
+---
+
+# Development Philosophy
+
+The VCU is intentionally designed as a relatively simple, deterministic vehicle-control layer rather than attempting to duplicate the functions of the inverter.
+
+The architecture is based around three principles:
+
+### 1. Keep the inverter responsible for motor control
+
+The VCU generates vehicle-level torque and speed requests.
+
+The inverter remains responsible for actually controlling the motor and enforcing its own limits.
+
+### 2. Make drivetrain behaviour tunable
+
+Important control parameters are exposed through EEPROM configuration and the serial console so that the vehicle can be tuned without repeatedly modifying firmware.
+
+### 3. Use real drivetrain feedback
+
+Gear detection, rev matching and traction control are based on measured vehicle and motor behaviour rather than fixed timing assumptions.
+
+This is particularly important for the manual gearbox, where the driver can vary the duration of a shift.
+
+---
+
+# Project
+
+This project is part of the wider **electric Mazda RX-8 conversion** development.
+
+The goal is not simply to replace the rotary engine with an electric motor, but to retain as much of the original RX-8 driving experience as possible while adding the control precision available from an electric drivetrain.
+
+The VCU is a key part of that system, providing the bridge between the original vehicle, the manual gearbox and the OpenInverter motor controller.
+
+---
+
+## Status
+
+**Active development / road testing**
+
+The hardware and core firmware are operational. Current development is focused primarily on drivetrain calibration, particularly traction-control behaviour and torque-ramp tuning during gear changes.
