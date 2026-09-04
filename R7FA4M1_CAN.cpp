@@ -289,7 +289,16 @@ case CAN_EVENT_TX_COMPLETE:
 {
     _tx_busy = false;
 }
-break;    case CAN_EVENT_RX_COMPLETE: // Currently driver don't support this. This is unreachable code for now.
+break;
+
+case CAN_EVENT_TX_ABORTED:
+{
+    _tx_busy = false;
+    _is_error = true;
+    _err_code = p_args->event;
+}
+break;   
+case CAN_EVENT_RX_COMPLETE: // Currently driver don't support this. This is unreachable code for now.
     {
       /* Extract the received CAN message. */
       CanMsg const msg
@@ -309,7 +318,7 @@ break;    case CAN_EVENT_RX_COMPLETE: // Currently driver don't support this. Th
     case CAN_EVENT_MAILBOX_MESSAGE_LOST: /* overwrite/overrun error event */
     case CAN_EVENT_ERR_BUS_LOCK:         /* Bus lock detected (32 consecutive dominant bits). */
     case CAN_EVENT_ERR_CHANNEL:          /* Channel error has occurred. */
-    case CAN_EVENT_TX_ABORTED:           /* Transmit abort event. */
+
     case CAN_EVENT_ERR_GLOBAL:           /* Global error has occurred. */
     case CAN_EVENT_TX_FIFO_EMPTY:        /* Transmit FIFO is empty. */
     {

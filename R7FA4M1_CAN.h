@@ -80,6 +80,12 @@ bool txReady() const { return !_tx_busy; }
   static size_t constexpr CAN_MAX_NO_EXTENDED_MAILBOXES = 8U;
 
 private:
+
+    int _can_tx_pin;
+    int _can_rx_pin;
+
+   
+
   static size_t constexpr CAN_MAX_NO_MAILBOXES = 32U;
   static size_t constexpr CAN_MAX_STANDARD_MAILBOX_OFFSET = 24U;
   static size_t constexpr CAN_MAX_EXTENDED_MAILBOX_OFFSET = 16U;
