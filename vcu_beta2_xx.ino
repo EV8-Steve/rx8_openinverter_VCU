@@ -1,10 +1,11 @@
 
 
 
-/*Beta 2.0
+/*Beta 2.1 - NOTE MUST NOW USE MODIFIED FILES (R7FAM1_CAN.cpp & R7FAM1_CAN.h) IN PLACE OF THE CORE FILES IN THE ARDUINO_CAN LIBARY
 
-
-  v2.0 now included latchable launch control – Stable shift state machine - ratio learing can be toggled on and off - rev match gain adjustable gain per gear
+  Replaced pcmburst based on timings as it was not great some can sends missed or mistimed, modified Arudino_CAN libary expose when message tx was succesfull, 
+  CAN send now deterministic with each frame sent on succusful transmit of previous, Also increased frequencey of pcm201 frames to smooth dash needle movementsfollowing frames now transmit once previous sent sucesfully.
+  v2.1 BETTER CAN send now included latchable launch control – Stable shift state machine - ratio learing can be toggled on and off - rev match gain adjustable gain per gear
 
 
   NEW lauch conntrol hold down both shift paddles while sationary for 3 seconds, rev counter will count up 123 once toggled on rev counter does 2
@@ -94,9 +95,9 @@ struct DebounceInput {
 // Traction control
 // ------------------------------------------------------------
 
-#define TC_TACH_START_DELAY 1050
-#define TC_TACH_LOW_TIME    525
-#define TC_TACH_HIGH_TIME   1050
+#define TC_TACH_START_DELAY 1000
+#define TC_TACH_LOW_TIME    500
+#define TC_TACH_HIGH_TIME   1000
 
 
 #define TC_TARGET_SLIP_PERCENT 7.0f
@@ -198,6 +199,7 @@ unsigned long lastPCMUpdate = 0;
 unsigned long lastDebugUpdate = 0;
 unsigned long lastLog = 0;
 unsigned long lastEngineRun = 0;
+unsigned long lastPCM201Update = 0;
 
 
 // ------------------------------------------------------------
@@ -283,12 +285,11 @@ enum PCMBurstState {
   PCM_620,
   PCM_630,
   PCM_650,
-  PCM_201
-};
+  };
 
 PCMBurstState pcmState = PCM_IDLE;
 
-unsigned long pcmNextFrameTime = 0;
+
 
 
 // ------------------------------------------------------------
@@ -650,8 +651,7 @@ void updateDebounce(DebounceInput &input)
 // FUNCTION PROTOTYPES
 // ============================================================
 
-inline void sendFrame(uint16_t id, uint8_t dlc, uint8_t *data);
-
+inline bool sendFrame(uint16_t id, uint8_t dlc, uint8_t *data);
 
 // ------------------------------------------------------------
 // Odometer calculation
@@ -1459,10 +1459,12 @@ void updatePCM() {
   send201[4] = highByte(tempVehicleSpeed);
   send201[5] = lowByte(tempVehicleSpeed);
 
-  CanMsg msg(0x201, 8, send201);
-  CAN.write(msg);
-  canTxCount++;
-  lastTxID = msg.id;
+CanMsg msg(0x201, 8, send201);
+
+if (CAN.txReady() && CAN.write(msg)) {
+    canTxCount++;
+    lastTxID = msg.id;
+}
 }
 
 
@@ -1473,129 +1475,81 @@ void sendODO() {
   updateMIL();
 
   CanMsg msg(0x420, 7, send420);
-  // CAN.write(msg);
-  if (!CAN.write(msg)) {
-    Serial.println("CAN 420 FAILED");
+
+  if (CAN.txReady() && CAN.write(msg)) {
+    canTxCount++;
+    lastTxID = msg.id;
   }
-  canTxCount++;
-  lastTxID = msg.id;
 }
 
 
+// --------------------------------------------------
+// CAN TX helper
+// --------------------------------------------------
 
-void sendFrame(uint16_t id, uint8_t dlc, uint8_t *data)
+bool sendFrame(uint16_t id, uint8_t dlc, uint8_t *data)
 {
   CanMsg msg(id, dlc, data);
 
-  if (CAN.write(msg)) {
+  if (CAN.txReady() && CAN.write(msg)) {
     canTxCount++;
     lastTxID = id;
+    return true;
   }
+
+  return false;
 }
 
 void servicePCMBurst()
-
 {
-  unsigned long now = micros();
+    if (pcmState == PCM_IDLE)
+        return;
 
-  switch (pcmState) {
-    case PCM_IDLE:
-      break;
+    if (!CAN.txReady())
+        return;
 
-    case PCM_203:
+    switch (pcmState)
+    {
+        case PCM_203:
+            if (sendFrame(0x203, 7, send203))
+                pcmState = PCM_215;
+            break;
 
-      if (now < pcmNextFrameTime)
-        break;
+        case PCM_215:
+            if (sendFrame(0x215, 8, send215))
+                pcmState = PCM_231;
+            break;
 
-      sendFrame(0x203, 7, send203);
+        case PCM_231:
+            if (sendFrame(0x231, 8, send231))
+                pcmState = PCM_240;
+            break;
 
-      pcmNextFrameTime += 250;
-      pcmState = PCM_215;
-      break;
+        case PCM_240:
+            if (sendFrame(0x240, 8, send240))
+                pcmState = PCM_620;
+            break;
 
+        case PCM_620:
+            if (sendFrame(0x620, 7, send620))
+                pcmState = PCM_630;
+            break;
 
-    case PCM_215:
+        case PCM_630:
+            if (sendFrame(0x630, 8, send630))
+                pcmState = PCM_650;
+            break;
 
-      if (now < pcmNextFrameTime)
-        break;
+        case PCM_650:
+            if (sendFrame(0x650, 1, send650))
+                pcmState = PCM_IDLE;
+            break;
 
-      sendFrame(0x215, 8, send215);
-
-      pcmNextFrameTime += 250;
-      pcmState = PCM_231;
-      break;
-
-
-    case PCM_231:
-
-      if (now < pcmNextFrameTime)
-        break;
-
-      sendFrame(0x231, 8, send231);
-
-      pcmNextFrameTime += 250;
-      pcmState = PCM_240;
-      break;
-
-
-    case PCM_240:
-
-      if (now < pcmNextFrameTime)
-        break;
-
-      sendFrame(0x240, 8, send240);
-
-      pcmNextFrameTime += 250;
-      pcmState = PCM_620;
-      break;
-
-
-    case PCM_620:
-
-      if (now < pcmNextFrameTime)
-        break;
-
-      sendFrame(0x620, 7, send620);
-
-      pcmNextFrameTime += 250;
-      pcmState = PCM_630;
-      break;
-
-
-    case PCM_630:
-
-      if (now < pcmNextFrameTime)
-        break;
-
-      sendFrame(0x630, 8, send630);
-
-      pcmNextFrameTime += 250;
-      pcmState = PCM_650;
-      break;
-
-
-    case PCM_650:
-
-      if (now < pcmNextFrameTime)
-        break;
-
-      sendFrame(0x650, 1, send650);
-
-      pcmNextFrameTime += 250;
-      pcmState = PCM_201;
-      break;
-
-
-    case PCM_201:
-
-      if (now < pcmNextFrameTime)
-        break;
-
-      updatePCM();
-
-      pcmState = PCM_IDLE;
-      break;
-  }
+        case PCM_IDLE:
+        default:
+            pcmState = PCM_IDLE;
+            break;
+    }
 }
 
 
@@ -1895,12 +1849,12 @@ void sendOpenInverterCommand() {
     Serial.println(payload[7], HEX);
   }
   CanMsg msg(INVERTER_CMD_ID, 8, payload);
-  CAN.write(msg);
 
-  canTxCount++;
-  lastTxID = msg.id;
+if (CAN.txReady() && CAN.write(msg)) {
+    canTxCount++;
+    lastTxID = msg.id;
 }
-
+}
 // --------------------------------------------------
 
 void setup() {
@@ -2038,19 +1992,20 @@ bool downEdge =
       serialLogOutput();
   }
 
+while (now - lastPCM201Update >= 50) {
+    lastPCM201Update += 50;
+    updatePCM();
+}
 
-  while (now - lastPCMUpdate >= 75
-  ) {
+ while (now - lastPCMUpdate >= 75) {
     lastPCMUpdate += 75;
 
     if (pcmState == PCM_IDLE) {
-      pcmState = PCM_203;
-      pcmNextFrameTime = micros();
+        pcmState = PCM_203;
     } else {
-      // We overran the previous burst
-      pcmOverruns++;
+        pcmOverruns++;
     }
-  }
+}
 
 
   while (now - lastDebugUpdate >= 1000) {
